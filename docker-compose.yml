@@ -19,5 +19,25 @@ services:
       timeout: 5s
       retries: 5
 
+  app:
+    build: .
+    container_name: messaging-service-app
+    ports:
+      - "8080:8080"
+    environment:
+      - RAILS_ENV=development
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=messaging_service
+      - DATABASE_USER=messaging_user
+      - DATABASE_PASSWORD=messaging_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - bundle_cache:/usr/local/bundle
+
 volumes:
-  postgres_data: 
+  postgres_data:
+  bundle_cache: 
