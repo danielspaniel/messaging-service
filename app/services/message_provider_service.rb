@@ -20,33 +20,33 @@ class MessageProviderService
     end
   end
   
-  def self.send_sms(message_params)
-    # In real implementation, this would make an actual API call to SMS provider
-    # For now, we'll just return a mock response
-    {
-      provider_id: "sms_provider",
-      status: 'sent',
-      provider: 'sms_provider'
-    }
+  def self.send_sms(params)
+    # In production, this would make an HTTP request to Twilio
+    Rails.logger.info "Sending SMS to #{params[:to]}: #{params[:body]}"
+    
+    provider_id = "sms_#{SecureRandom.hex(8)}_#{Time.current.to_i}"
+    Rails.logger.info "SMS sent successfully, provider_id: #{provider_id}"
+    
+    { provider_id: provider_id }
   end
-  
-  def self.send_mms(message_params)
-    # In real implementation, this would make an actual API call to MMS provider
-    # For now, we'll just return a mock response
-    {
-      provider_id: "mms_provider",
-      status: 'sent',
-      provider: 'mms_provider'
-    }
+
+  def self.send_mms(params)
+    # In production, this would make an HTTP request to Twilio
+    Rails.logger.info "Sending MMS to #{params[:to]}: #{params[:body]}"
+    
+    provider_id = "mms_#{SecureRandom.hex(8)}_#{Time.current.to_i}"
+    Rails.logger.info "MMS sent successfully, provider_id: #{provider_id}"
+    
+    { provider_id: provider_id }
   end
-  
-  def self.send_email(message_params)
-    # In real implementation, this would make an actual API call to email provider
-    # For now, we'll just return a mock response
-    {
-      provider_id: "email_provider",
-      status: 'sent',
-      provider: 'email_provider'
-    }
+
+  def self.send_email(params)
+    # In production, this would make an HTTP request to SendGrid
+    Rails.logger.info "Sending Email to #{params[:to]}: #{params[:body]}"
+    
+    provider_id = "email_#{SecureRandom.hex(8)}_#{Time.current.to_i}"
+    Rails.logger.info "Email sent successfully, provider_id: #{provider_id}"
+    
+    { provider_id: provider_id }
   end
 end

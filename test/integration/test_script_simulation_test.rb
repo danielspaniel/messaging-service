@@ -18,7 +18,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :accepted  # 202 for queued messages
     response_data = JSON.parse(response.body)
     assert response_data['success']
     assert_includes response_data['data'], 'message_id'
@@ -35,7 +35,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :accepted  # 202 for queued messages
     response_data = JSON.parse(response.body)
     assert response_data['success']
     
@@ -54,14 +54,16 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :accepted  # 202 for queued messages
     response_data = JSON.parse(response.body)
     assert response_data['success']
     
     # Verify email was created
     message = Message.last
     assert_equal 'email', message.message_type
-    assert_not_nil message.xillio_id
+    assert_equal 'queued', message.status  # Initially queued
+    # Provider ID is set after job processes
+    assert_nil message.xillio_id
   end
 
   def test_4_incoming_sms_webhook
@@ -75,7 +77,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :created  # 201 for webhook messages (immediate)
     response_data = JSON.parse(response.body)
     assert response_data['success']
     
@@ -97,7 +99,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :created  # 201 for webhook messages (immediate)
     response_data = JSON.parse(response.body)
     assert response_data['success']
     
@@ -118,7 +120,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :created  # 201 for webhook messages (immediate)
     response_data = JSON.parse(response.body)
     assert response_data['success']
     
@@ -165,7 +167,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :accepted  # 202 for queued messages
     sms_conversation_id = JSON.parse(response.body)['data']['conversation_id']
     
     # Test 2: Send MMS
@@ -178,7 +180,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :accepted  # 202 for queued messages
     # Should be same conversation as SMS
     assert_equal sms_conversation_id, JSON.parse(response.body)['data']['conversation_id']
     
@@ -191,7 +193,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :accepted  # 202 for queued messages
     email_conversation_id = JSON.parse(response.body)['data']['conversation_id']
     
     # Email should be in different conversation
@@ -207,7 +209,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :created  # 201 for webhook messages (immediate)
     # Should be same conversation as outbound SMS/MMS
     assert_equal sms_conversation_id, JSON.parse(response.body)['data']['conversation_id']
     
@@ -222,7 +224,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :created  # 201 for webhook messages (immediate)
     
     # Test 6: Receive Email webhook
     post '/api/webhooks/email', params: {
@@ -234,7 +236,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :created  # 201 for webhook messages (immediate)
     # Should be same conversation as outbound email
     assert_equal email_conversation_id, JSON.parse(response.body)['data']['conversation_id']
     

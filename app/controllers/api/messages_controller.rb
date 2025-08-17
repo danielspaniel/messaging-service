@@ -13,14 +13,7 @@ class Api::MessagesController < Api::BaseController
     end
     
     # Send message via provider
-    provider_response = case message_params[:type]
-                       when 'sms'
-                         MessageProviderService.send_sms(message_params)
-                       when 'mms'
-                         MessageProviderService.send_mms(message_params)
-                       end
-    
-    # Create outbound message
+        # Create message record first (in pending status)
     message = Message.create_with_conversation!(
       from: message_params[:from],
       to: message_params[:to],
@@ -29,17 +22,21 @@ class Api::MessagesController < Api::BaseController
       attachments: message_params[:attachments] || [],
       timestamp: message_params[:timestamp] || Time.current,
       direction: 'outbound',
-      messaging_provider_id: provider_response[:provider_id]
+      status: 'pending'
     )
-    
+
+    # Queue the message for background processing
+    message.mark_as_queued!
+    SendMessageJob.perform_later(message.id)
+
     render_success(
       {
         message_id: message.id,
-        provider_id: message.messaging_provider_id,
         conversation_id: message.conversation_id,
-        status: 'sent'
+        status: 'queued',
+        status_url: "/api/messages/#{message.id}/status"
       },
-      :created
+      :accepted  # 202 Accepted instead of 201 Created
     )
   end
   
@@ -47,10 +44,7 @@ class Api::MessagesController < Api::BaseController
   def send_email
     message_params = email_message_params
     
-    # Send email via provider
-    provider_response = MessageProviderService.send_email(message_params)
-    
-    # Create outbound message
+    # Create message record first (in pending status)
     message = Message.create_with_conversation!(
       from: message_params[:from],
       to: message_params[:to],
@@ -59,18 +53,61 @@ class Api::MessagesController < Api::BaseController
       attachments: message_params[:attachments] || [],
       timestamp: message_params[:timestamp] || Time.current,
       direction: 'outbound',
-      xillio_id: provider_response[:provider_id]
+      status: 'pending'
     )
-    
+
+    # Queue the message for background processing
+    message.mark_as_queued!
+    SendMessageJob.perform_later(message.id)
+
     render_success(
       {
         message_id: message.id,
-        provider_id: message.xillio_id,
         conversation_id: message.conversation_id,
-        status: 'sent'
+        status: 'queued',
+        status_url: "/api/messages/#{message.id}/status"
       },
-      :created
+      :accepted  # 202 Accepted instead of 201 Created
     )
+  end
+  
+  # Get message details
+  def show
+    message = Message.find(params[:id])
+    
+    render_success({
+      id: message.id,
+      conversation_id: message.conversation_id,
+      from: message.from,
+      to: message.to,
+      message_type: message.message_type,
+      body: message.body,
+      status: message.status,
+      direction: message.direction,
+      created_at: message.created_at,
+      queued_at: message.queued_at,
+      sent_at: message.sent_at,
+      failed_at: message.failed_at,
+      error_message: message.error_message,
+      retry_count: message.retry_count,
+      provider_message_id: message.provider_message_id
+    })
+  end
+  
+  # Get just the status (lighter endpoint)
+  def status
+    message = Message.find(params[:id])
+    
+    render_success({
+      id: message.id,
+      status: message.status,
+      created_at: message.created_at,
+      queued_at: message.queued_at,
+      sent_at: message.sent_at,
+      failed_at: message.failed_at,
+      retry_count: message.retry_count,
+      error_message: message.error_message
+    })
   end
   
   private

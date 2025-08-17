@@ -20,11 +20,17 @@ Rails.application.routes.draw do
     end
     
     # Conversation management
-    resources :conversations, only: [:index, :show] do
-      member do
-        get :messages
-      end
-    end
+            resources :conversations, only: [:index, :show] do
+          member do
+            get :messages
+          end
+        end
+        
+        resources :messages, only: [:show] do
+          member do
+            get :status
+          end
+        end
   end
 
   # Defines the root path route ("/")

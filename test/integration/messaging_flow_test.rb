@@ -11,7 +11,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :accepted  # 202 for queued messages
     outbound_response = JSON.parse(response.body)
     conversation_id = outbound_response['data']['conversation_id']
     
@@ -25,7 +25,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:05:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :created  # 201 for webhook messages (immediate)
     inbound_response = JSON.parse(response.body)
     
     # Verify both messages are in the same conversation
@@ -54,7 +54,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :accepted  # 202 for queued messages
     outbound_response = JSON.parse(response.body)
     conversation_id = outbound_response['data']['conversation_id']
     
@@ -69,7 +69,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:05:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :created  # 201 for webhook messages (immediate)
     
     # Verify messages have attachments
     get "/api/conversations/#{conversation_id}/messages", as: :json
@@ -89,7 +89,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :accepted  # 202 for queued messages
     outbound_response = JSON.parse(response.body)
     conversation_id = outbound_response['data']['conversation_id']
     
@@ -103,7 +103,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:30:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :created  # 201 for webhook messages (immediate)
     
     # Verify conversation contains both email messages
     get "/api/conversations/#{conversation_id}/messages", as: :json
@@ -152,17 +152,27 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
     MessageProviderService.stubs(:send_sms)
       .raises(MessageProviderService::ServerError, 'Provider returned 500: Internal Server Error')
     
-    post '/api/messages/sms', params: {
-      from: '+12016661234',
-      to: '+18045551234',
-      type: 'sms',
-      body: 'This will fail'
-    }, as: :json
+    # Message is created and queued successfully
+    assert_difference 'Message.count', 1 do
+      post '/api/messages/sms', params: {
+        from: '+12016661234',
+        to: '+18045551234',
+        type: 'sms',
+        body: 'This will fail'
+      }, as: :json
+      
+      assert_response :accepted  # 202 for queued messages
+    end
     
-    assert_response 502 # Bad Gateway (our ServerError handler)
-    error_response = JSON.parse(response.body)
-    assert_not error_response['success']
-    assert_equal 'Provider server error', error_response['error']
+    # Process the job to trigger the error
+    perform_enqueued_jobs
+    
+    # Check that the message failed
+    message = Message.last
+    message.reload
+    assert_equal 'failed', message.status
+    assert_not_nil message.failed_at
+    assert_includes message.error_message, 'Provider returned 500: Internal Server Error'
   end
 
   def test_invalid_message_data_handling

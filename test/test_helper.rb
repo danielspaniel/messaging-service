@@ -21,6 +21,9 @@ class ActiveSupport::TestCase
 
   # Include FactoryBot methods
   include FactoryBot::Syntax::Methods
+  
+  # Include ActiveJob test helpers
+  include ActiveJob::TestHelper
 
   # Setup database cleaner
   setup do

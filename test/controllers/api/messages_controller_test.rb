@@ -34,13 +34,14 @@ class Api::MessagesControllerTest < ActionDispatch::IntegrationTest
     assert_difference 'Message.count', 1 do
       post '/api/messages/sms', params: @valid_sms_params, as: :json
 
-      assert_response :created
+      assert_response :accepted  # 202 for queued messages
       json_response = JSON.parse(response.body)
       assert json_response['success']
       assert_includes json_response['data'], 'message_id'
-      assert_includes json_response['data'], 'provider_id'
       assert_includes json_response['data'], 'conversation_id'
       assert_includes json_response['data'], 'status'
+      assert_includes json_response['data'], 'status_url'
+      assert_equal 'queued', json_response['data']['status']
     end
   end
 
@@ -59,7 +60,10 @@ class Api::MessagesControllerTest < ActionDispatch::IntegrationTest
     assert_equal @valid_sms_params[:type], message.message_type
     assert_equal @valid_sms_params[:body], message.body
     assert_equal 'outbound', message.direction
-    assert_equal 'sms_provider', message.messaging_provider_id
+    assert_equal 'queued', message.status  # Initially queued
+    assert_not_nil message.queued_at
+    # Provider ID is set after job processes, not immediately
+    assert_nil message.messaging_provider_id
   end
 
   def test_send_sms_creates_mms_message_with_attachments
@@ -83,37 +87,66 @@ class Api::MessagesControllerTest < ActionDispatch::IntegrationTest
     MessageProviderService.stubs(:send_sms)
       .raises(MessageProviderService::RateLimitError, 'Too many requests')
     
-    post '/api/messages/sms', params: @valid_sms_params, as: :json
+    # Message is created and queued successfully
+    assert_difference 'Message.count', 1 do
+      post '/api/messages/sms', params: @valid_sms_params, as: :json
+      assert_response :accepted  # Controller always returns 202
+    end
     
-    assert_response 429
-    json_response = JSON.parse(response.body)
-    assert_equal 'Rate limit exceeded', json_response['error']
-    assert_equal 'Too many requests', json_response['message']
-    assert_equal 60, json_response['retry_after']
+    # Process the enqueued job to trigger the error
+    perform_enqueued_jobs
+    
+    # Job processes and message should be marked as failed
+    message = Message.last
+    message.reload  # Refresh from database
+    assert_equal 'failed', message.status
+    assert_not_nil message.failed_at
+    assert_includes message.error_message, 'Too many requests'
+    assert_equal 1, message.retry_count
   end
 
   def test_send_sms_handles_server_error
     MessageProviderService.stubs(:send_sms)
       .raises(MessageProviderService::ServerError, 'Provider is down')
     
-    post '/api/messages/sms', params: @valid_sms_params, as: :json
+    # Message is created and queued successfully
+    assert_difference 'Message.count', 1 do
+      post '/api/messages/sms', params: @valid_sms_params, as: :json
+      assert_response :accepted  # Controller always returns 202
+    end
     
-    assert_response 502
-    json_response = JSON.parse(response.body)
-    assert_equal 'Provider server error', json_response['error']
-    assert_equal 'Provider is down', json_response['message']
+    # Process the enqueued job to trigger the error
+    perform_enqueued_jobs
+    
+    # Job processes and message should be marked as failed
+    message = Message.last
+    message.reload  # Refresh from database
+    assert_equal 'failed', message.status
+    assert_not_nil message.failed_at
+    assert_includes message.error_message, 'Provider is down'
+    assert_equal 1, message.retry_count
   end
 
   def test_send_mms_handles_provider_error
     MessageProviderService.stubs(:send_mms)
       .raises(MessageProviderService::ProviderError.new('Custom error', 503))
     
-    post '/api/messages/sms', params: @valid_mms_params, as: :json
+    # Message is created and queued successfully
+    assert_difference 'Message.count', 1 do
+      post '/api/messages/sms', params: @valid_mms_params, as: :json
+      assert_response :accepted  # Controller always returns 202
+    end
     
-    assert_response 503
-    json_response = JSON.parse(response.body)
-    assert_equal 'Provider error', json_response['error']
-    assert_equal 'Custom error', json_response['message']
+    # Process the enqueued job to trigger the error
+    perform_enqueued_jobs
+    
+    # Job processes and message should be marked as failed
+    message = Message.last
+    message.reload  # Refresh from database
+    assert_equal 'failed', message.status
+    assert_not_nil message.failed_at
+    assert_includes message.error_message, 'Custom error'
+    assert_equal 1, message.retry_count
   end
 
   def test_send_email_creates_new_email_message
@@ -125,9 +158,11 @@ class Api::MessagesControllerTest < ActionDispatch::IntegrationTest
   def test_send_email_returns_success_response
     post '/api/messages/email', params: @valid_email_params, as: :json
     
-    assert_response :created
+    assert_response :accepted  # 202 for queued messages
     json_response = JSON.parse(response.body)
     assert json_response['success']
+    assert_includes json_response['data'], 'status'
+    assert_equal 'queued', json_response['data']['status']
   end
 
   def test_send_email_sets_correct_email_attributes
@@ -135,7 +170,10 @@ class Api::MessagesControllerTest < ActionDispatch::IntegrationTest
     
     message = Message.last
     assert_equal 'email', message.message_type
-    assert_not_nil message.xillio_id
+    assert_equal 'queued', message.status  # Initially queued
+    assert_not_nil message.queued_at
+    # Provider IDs are set after job processes, not immediately
+    assert_nil message.xillio_id
     assert_nil message.messaging_provider_id
   end
 
@@ -143,12 +181,22 @@ class Api::MessagesControllerTest < ActionDispatch::IntegrationTest
     MessageProviderService.stubs(:send_email)
       .raises(MessageProviderService::RateLimitError, 'Email rate limit exceeded')
     
-    post '/api/messages/email', params: @valid_email_params, as: :json
+    # Message is created and queued successfully
+    assert_difference 'Message.count', 1 do
+      post '/api/messages/email', params: @valid_email_params, as: :json
+      assert_response :accepted  # Controller always returns 202
+    end
     
-    assert_response 429
-    json_response = JSON.parse(response.body)
-    assert_equal 'Rate limit exceeded', json_response['error']
-    assert_equal 'Email rate limit exceeded', json_response['message']
+    # Process the enqueued job to trigger the error
+    perform_enqueued_jobs
+    
+    # Job processes and message should be marked as failed
+    message = Message.last
+    message.reload  # Refresh from database
+    assert_equal 'failed', message.status
+    assert_not_nil message.failed_at
+    assert_includes message.error_message, 'Email rate limit exceeded'
+    assert_equal 1, message.retry_count
   end
 
   def test_send_sms_reuses_existing_conversation_between_same_participants
@@ -161,7 +209,7 @@ class Api::MessagesControllerTest < ActionDispatch::IntegrationTest
     # Send an SMS message between the same participants
     post '/api/messages/sms', params: @valid_sms_params, as: :json
     
-    assert_response :created
+    assert_response :accepted  # 202 for queued messages
     
     # Verify no new conversation was created
     assert_equal 1, Conversation.count
@@ -191,7 +239,7 @@ class Api::MessagesControllerTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :created
+    assert_response :accepted  # 202 for queued messages
     
     # Should still reuse the existing conversation
     assert_equal 1, Conversation.count
