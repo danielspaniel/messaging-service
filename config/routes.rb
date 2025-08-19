@@ -8,29 +8,30 @@ Rails.application.routes.draw do
   # API routes
   namespace :api do
     # Message sending endpoints
-    scope :messages do
-      post :sms, to: 'messages#send_sms'
-      post :email, to: 'messages#send_email'
-    end
-    
+    post :messages, to: 'messages#create'
+    # Legacy message endpoints (shim to unified create)
+    post 'messages/sms', to: 'messages#create', defaults: { type: 'sms' }
+    post 'messages/mms', to: 'messages#create', defaults: { type: 'mms' }
+    post 'messages/email', to: 'messages#create', defaults: { type: 'email' }
+
     # Webhook endpoints for receiving messages
     scope :webhooks do
       post :sms, to: 'webhooks#receive_sms'
       post :email, to: 'webhooks#receive_email'
     end
-    
+
     # Conversation management
-            resources :conversations, only: [:index, :show] do
-          member do
-            get :messages
-          end
-        end
-        
-        resources :messages, only: [:show] do
-          member do
-            get :status
-          end
-        end
+    resources :conversations, only: [:index, :show, :create] do
+      member do
+        get :messages
+      end
+    end
+
+    resources :messages, only: [:show] do
+      member do
+        get :status
+      end
+    end
   end
 
   # Defines the root path route ("/")

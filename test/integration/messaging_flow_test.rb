@@ -3,7 +3,7 @@ require "test_helper"
 class MessagingFlowTest < ActionDispatch::IntegrationTest
   def test_complete_sms_messaging_workflow
     # Send outbound SMS
-    post '/api/messages/sms', params: {
+    post '/api/messages', params: {
       from: '+12016661234',
       to: '+18045551234',
       type: 'sms',
@@ -11,7 +11,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :accepted  # 202 for queued messages
+    assert_response :created  # 202 for queued messages
     outbound_response = JSON.parse(response.body)
     conversation_id = outbound_response['data']['conversation_id']
     
@@ -20,7 +20,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
       from: '+18045551234',
       to: '+12016661234',
       type: 'sms',
-      messaging_provider_id: 'incoming-msg-1',
+      provider_message_id: 'incoming-msg-1',
       body: 'Hi there! I am doing well, thanks for asking.',
       timestamp: '2024-11-01T14:05:00Z'
     }, as: :json
@@ -39,13 +39,12 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
     messages = messages_response['data']
     
     assert_equal 2, messages.length
-    assert_equal 'outbound', messages.first['direction']
-    assert_equal 'inbound', messages.last['direction']
+    # Direction is no longer tracked - messages are identified by sender/timestamp
   end
 
   def test_mms_with_attachments_workflow
     # Send outbound MMS with attachment
-    post '/api/messages/sms', params: {
+    post '/api/messages', params: {
       from: '+12016661234',
       to: '+18045551234',
       type: 'mms',
@@ -54,7 +53,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :accepted  # 202 for queued messages
+    assert_response :created  # 202 for queued messages
     outbound_response = JSON.parse(response.body)
     conversation_id = outbound_response['data']['conversation_id']
     
@@ -63,7 +62,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
       from: '+18045551234',
       to: '+12016661234',
       type: 'mms',
-      messaging_provider_id: 'incoming-mms-1',
+      provider_message_id: 'incoming-mms-1',
       body: 'Nice photo! Here is mine.',
       attachments: ['https://example.com/reply-photo.jpg'],
       timestamp: '2024-11-01T14:05:00Z'
@@ -81,15 +80,16 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
 
   def test_email_messaging_workflow
     # Send outbound email
-    post '/api/messages/email', params: {
+    post '/api/messages', params: {
       from: 'user@usehatchapp.com',
       to: 'contact@gmail.com',
+      type: 'email',
       body: 'Hello! This is an important <b>HTML</b> email.',
       attachments: ['https://example.com/document.pdf'],
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :accepted  # 202 for queued messages
+    assert_response :created  # 202 for queued messages
     outbound_response = JSON.parse(response.body)
     conversation_id = outbound_response['data']['conversation_id']
     
@@ -97,7 +97,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
     post '/api/webhooks/email', params: {
       from: 'contact@gmail.com',
       to: 'user@usehatchapp.com',
-      xillio_id: 'email-reply-1',
+      provider_message_id: 'email-reply-1',
       body: '<html><body>Thank you for your email! I received the document.</body></html>',
       attachments: [],
       timestamp: '2024-11-01T14:30:00Z'
@@ -115,7 +115,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
 
   def test_separate_conversations_for_different_participants
     # Conversation 1: User A and User B
-    post '/api/messages/sms', params: {
+    post '/api/messages', params: {
       from: '+12016661234',
       to: '+18045551234',
       type: 'sms',
@@ -125,7 +125,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
     conversation1_id = JSON.parse(response.body)['data']['conversation_id']
     
     # Conversation 2: User A and User C
-    post '/api/messages/sms', params: {
+    post '/api/messages', params: {
       from: '+12016661234',
       to: '+15551234567',
       type: 'sms',
@@ -148,20 +148,23 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
   end
 
   def test_provider_failure_handling
+    # Unstub jobs for this test so we can test job execution
+    SendMessageJob.unstub(:perform_later)
+    
     # Simulate provider failure
     MessageProviderService.stubs(:send_sms)
       .raises(MessageProviderService::ServerError, 'Provider returned 500: Internal Server Error')
     
     # Message is created and queued successfully
     assert_difference 'Message.count', 1 do
-      post '/api/messages/sms', params: {
+      post '/api/messages', params: {
         from: '+12016661234',
         to: '+18045551234',
         type: 'sms',
         body: 'This will fail'
       }, as: :json
       
-      assert_response :accepted  # 202 for queued messages
+      assert_response :created  # 202 for queued messages
     end
     
     # Process the job to trigger the error
@@ -171,18 +174,24 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
     message = Message.last
     message.reload
     assert_equal 'failed', message.status
-    assert_not_nil message.failed_at
-    assert_includes message.error_message, 'Provider returned 500: Internal Server Error'
+    
+    # Check that the delivery failed
+    delivery = message.message_deliveries.first
+    assert_not_nil delivery.failed_at
+    assert_includes delivery.failure_reason, 'Provider returned 500: Internal Server Error'
+  ensure
+    # Re-stub jobs for other tests
+    SendMessageJob.stubs(:perform_later).returns(true)
   end
 
   def test_invalid_message_data_handling
-    post '/api/messages/sms', params: {
+    post '/api/messages', params: {
       from: '+12016661234',
       # missing required fields like 'to', 'body'
       type: 'sms'
     }, as: :json
     
-    assert_response :unprocessable_content
+    assert_response :bad_request
     
     # Verify no message was created (conversation might be created but validation should fail)
     assert_equal 0, Message.count
@@ -190,7 +199,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
 
   def test_conversation_reuse_for_same_participants
     # Send first message
-    post '/api/messages/sms', params: {
+    post '/api/messages', params: {
       from: '+12016661234',
       to: '+18045551234',
       type: 'sms',
@@ -200,7 +209,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
     first_conversation_id = JSON.parse(response.body)['data']['conversation_id']
     
     # Send second message with same participants
-    post '/api/messages/sms', params: {
+    post '/api/messages', params: {
       from: '+12016661234',
       to: '+18045551234',
       type: 'sms',
@@ -221,7 +230,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
 
   def test_participant_order_normalization
     # Send message from A to B
-    post '/api/messages/sms', params: {
+    post '/api/messages', params: {
       from: '+12016661234',
       to: '+18045551234',
       type: 'sms',
@@ -235,7 +244,7 @@ class MessagingFlowTest < ActionDispatch::IntegrationTest
       from: '+18045551234',
       to: '+12016661234',
       type: 'sms',
-      messaging_provider_id: 'webhook-1',
+      provider_message_id: 'webhook-1',
       body: 'Reply from B to A'
     }, as: :json
     

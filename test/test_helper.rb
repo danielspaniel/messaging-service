@@ -28,6 +28,10 @@ class ActiveSupport::TestCase
   # Setup database cleaner
   setup do
     DatabaseCleaner.start
+    
+    # Mock jobs to avoid running them in tests
+    SendMessageJob.stubs(:perform_later).returns(true)
+    MessageDeliveryJob.stubs(:perform_later).returns(true)
   end
 
   teardown do

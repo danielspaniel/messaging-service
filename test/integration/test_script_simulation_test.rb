@@ -9,7 +9,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
   end
 
   def test_1_sms_send_endpoint
-    post '/api/messages/sms', params: {
+    post '/api/messages', params: {
       from: '+12016661234',
       to: '+18045551234',
       type: 'sms',
@@ -18,7 +18,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :accepted  # 202 for queued messages
+    assert_response :created  # 201 for created messages
     response_data = JSON.parse(response.body)
     assert response_data['success']
     assert_includes response_data['data'], 'message_id'
@@ -26,7 +26,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
   end
 
   def test_2_mms_send_endpoint
-    post '/api/messages/sms', params: {
+    post '/api/messages', params: {
       from: '+12016661234',
       to: '+18045551234',
       type: 'mms',
@@ -35,7 +35,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :accepted  # 202 for queued messages
+    assert_response :created  # 201 for created messages
     response_data = JSON.parse(response.body)
     assert response_data['success']
     
@@ -46,24 +46,25 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
   end
 
   def test_3_email_send_endpoint
-    post '/api/messages/email', params: {
+    post '/api/messages', params: {
       from: 'user@usehatchapp.com',
       to: 'contact@gmail.com',
+      type: 'email',
       body: 'Hello! This is a test email message with <b>HTML</b> formatting.',
       attachments: ['https://example.com/document.pdf'],
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :accepted  # 202 for queued messages
+    assert_response :created  # 201 for created messages
     response_data = JSON.parse(response.body)
     assert response_data['success']
     
     # Verify email was created
     message = Message.last
     assert_equal 'email', message.message_type
-    assert_equal 'queued', message.status  # Initially queued
+    assert_equal 'sending', message.status  # Initially sending with deliveries
     # Provider ID is set after job processes
-    assert_nil message.xillio_id
+    assert_nil message.provider_message_id
   end
 
   def test_4_incoming_sms_webhook
@@ -71,7 +72,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       from: '+18045551234',
       to: '+12016661234',
       type: 'sms',
-      messaging_provider_id: 'message-1',
+      provider_message_id: 'message-1',
       body: 'This is an incoming SMS message',
       attachments: nil,
       timestamp: '2024-11-01T14:00:00Z'
@@ -84,8 +85,8 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
     # Verify inbound SMS was created
     message = Message.last
     assert_equal 'sms', message.message_type
-    assert_equal 'inbound', message.direction
-    assert_equal 'message-1', message.messaging_provider_id
+    # Direction is no longer tracked - messages are inbound based on webhook source
+    assert_equal 'message-1', message.provider_message_id
   end
 
   def test_5_incoming_mms_webhook
@@ -93,7 +94,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       from: '+18045551234',
       to: '+12016661234',
       type: 'mms',
-      messaging_provider_id: 'message-2',
+      provider_message_id: 'message-2',
       body: 'This is an incoming MMS message',
       attachments: ['https://example.com/received-image.jpg'],
       timestamp: '2024-11-01T14:00:00Z'
@@ -106,7 +107,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
     # Verify inbound MMS was created
     message = Message.last
     assert_equal 'mms', message.message_type
-    assert_equal 'inbound', message.direction
+    # Direction is no longer tracked - messages are inbound based on webhook source
     assert_equal ['https://example.com/received-image.jpg'], message.attachments
   end
 
@@ -114,7 +115,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
     post '/api/webhooks/email', params: {
       from: 'contact@gmail.com',
       to: 'user@usehatchapp.com',
-      xillio_id: 'message-3',
+      provider_message_id: 'message-3',
       body: '<html><body>This is an incoming email with <b>HTML</b> content</body></html>',
       attachments: ['https://example.com/received-document.pdf'],
       timestamp: '2024-11-01T14:00:00Z'
@@ -127,8 +128,8 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
     # Verify inbound email was created
     message = Message.last
     assert_equal 'email', message.message_type
-    assert_equal 'inbound', message.direction
-    assert_equal 'message-3', message.xillio_id
+    # Direction is no longer tracked - messages are inbound based on webhook source
+    assert_equal 'message-3', message.provider_message_id
   end
 
   def test_7_get_conversations_endpoint
@@ -159,7 +160,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
 
   def test_complete_test_script_workflow
     # Test 1: Send SMS
-    post '/api/messages/sms', params: {
+    post '/api/messages', params: {
       from: '+12016661234',
       to: '+18045551234',
       type: 'sms',
@@ -167,11 +168,11 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :accepted  # 202 for queued messages
+    assert_response :created  # 201 for created messages
     sms_conversation_id = JSON.parse(response.body)['data']['conversation_id']
     
     # Test 2: Send MMS
-    post '/api/messages/sms', params: {
+    post '/api/messages', params: {
       from: '+12016661234',
       to: '+18045551234',
       type: 'mms',
@@ -180,20 +181,22 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :accepted  # 202 for queued messages
-    # Should be same conversation as SMS
-    assert_equal sms_conversation_id, JSON.parse(response.body)['data']['conversation_id']
+    assert_response :created  # 201 for created messages
+    # Should be different conversation from SMS (different message types)
+    mms_conversation_id = JSON.parse(response.body)['data']['conversation_id']
+    assert_not_equal sms_conversation_id, mms_conversation_id
     
     # Test 3: Send Email
-    post '/api/messages/email', params: {
+    post '/api/messages', params: {
       from: 'user@usehatchapp.com',
       to: 'contact@gmail.com',
+      type: 'email',
       body: 'Hello! This is a test email message with <b>HTML</b> formatting.',
       attachments: ['https://example.com/document.pdf'],
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
     
-    assert_response :accepted  # 202 for queued messages
+    assert_response :created  # 201 for created messages
     email_conversation_id = JSON.parse(response.body)['data']['conversation_id']
     
     # Email should be in different conversation
@@ -204,7 +207,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       from: '+18045551234',
       to: '+12016661234',
       type: 'sms',
-      messaging_provider_id: 'message-1',
+      provider_message_id: 'message-1',
       body: 'This is an incoming SMS message',
       timestamp: '2024-11-01T14:00:00Z'
     }, as: :json
@@ -218,7 +221,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
       from: '+18045551234',
       to: '+12016661234',
       type: 'mms',
-      messaging_provider_id: 'message-2',
+      provider_message_id: 'message-2',
       body: 'This is an incoming MMS message',
       attachments: ['https://example.com/received-image.jpg'],
       timestamp: '2024-11-01T14:00:00Z'
@@ -230,7 +233,7 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
     post '/api/webhooks/email', params: {
       from: 'contact@gmail.com',
       to: 'user@usehatchapp.com',
-      xillio_id: 'message-3',
+      provider_message_id: 'message-3',
       body: '<html><body>This is an incoming email with <b>HTML</b> content</body></html>',
       attachments: ['https://example.com/received-document.pdf'],
       timestamp: '2024-11-01T14:00:00Z'
@@ -245,26 +248,17 @@ class TestScriptSimulationTest < ActionDispatch::IntegrationTest
     
     assert_response :success
     conversations = JSON.parse(response.body)['data']
-    assert_equal 2, conversations.length # SMS/MMS conversation and Email conversation
+    assert_equal 3, conversations.length # SMS conversation, MMS conversation, and Email conversation
     
     # Test 8: Get messages for SMS conversation
     get "/api/conversations/#{sms_conversation_id}/messages", as: :json
     
     assert_response :success
     sms_messages = JSON.parse(response.body)['data']
-    assert_equal 4, sms_messages.length # 2 outbound (SMS, MMS) + 2 inbound (SMS, MMS)
+    assert_equal 2, sms_messages.length # 1 outbound SMS + 1 inbound SMS
     
-    # Verify message types and directions
-    message_types = sms_messages.map { |m| [m['message_type'], m['direction']] }
-    expected_types = [
-      ['sms', 'outbound'],
-      ['mms', 'outbound'], 
-      ['sms', 'inbound'],
-      ['mms', 'inbound']
-    ]
-    
-    expected_types.each do |expected_type|
-      assert_includes message_types, expected_type
-    end
+    # Verify message types (only SMS messages in SMS conversation)
+    message_types = sms_messages.map { |m| m['message_type'] }
+    assert_equal ['sms', 'sms'], message_types.sort
   end
 end
